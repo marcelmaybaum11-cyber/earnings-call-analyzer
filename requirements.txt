@@ -1,0 +1,10 @@
+transformers==4.40.0
+torch==2.3.0
+yfinance==1.4.1
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+streamlit==1.35.0
+plotly==5.22.0
+statsmodels==0.14.6
+datasets==5.0.0
