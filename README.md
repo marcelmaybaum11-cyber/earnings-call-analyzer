@@ -67,4 +67,20 @@ streamlit run app.py
 
 ## Results
 
-_To be filled in after the analysis run._
+On 188 earnings calls (10 tech tickers, 2016–2020), management tone as
+measured by FinBERT **does** correlate with post-call returns:
+
+| Horizon | Spearman ρ (net sentiment vs return) | p-value | Baseline acc. | LogReg CV acc. |
+|---|---|---|---|---|
+| 1 day  | +0.246 | 0.001 | 55.9% | **60.6% ± 4.6%** |
+| 5 days | +0.222 | 0.002 | 53.7% | **63.4% ± 9.9%** |
+
+Both correlations are statistically significant (p < 0.01), and the
+classifier beats the majority-class baseline at both horizons. The effect
+is real but modest — tone explains a small part of post-earnings moves,
+which is consistent with the academic literature on earnings call
+sentiment.
+
+Caveats: tech mega-caps only, 2016–2020 (a strong bull market), and no
+control for the earnings surprise itself — sentiment likely proxies
+partly for whether results beat or missed expectations.
