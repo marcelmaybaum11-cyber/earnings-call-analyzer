@@ -26,6 +26,9 @@ def download_close_prices(ticker: str, start, end) -> pd.Series:
     )["Close"]
     if isinstance(prices, pd.DataFrame):  # newer yfinance returns a DataFrame
         prices = prices[ticker]
+    # Yahoo can return a NaN placeholder row for the current, still-open
+    # trading day - drop it so callers can trust every value.
+    prices = prices.dropna()
     if prices.empty:
         raise ValueError(f"No price data for {ticker} between {start} and {end}")
     return prices

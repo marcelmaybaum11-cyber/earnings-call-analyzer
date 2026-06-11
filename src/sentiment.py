@@ -41,11 +41,14 @@ class FinbertScorer:
             for start in range(0, len(token_ids), MAX_CHUNK_TOKENS)
         ]
 
-    def score(self, text: str) -> dict[str, float]:
+    def score(self, text: str, on_progress=None) -> dict[str, float]:
         """Return {'positive': p, 'negative': n, 'neutral': u} summing to 1.
 
         Each chunk's probabilities are weighted by its token count, so
         longer passages influence the final score proportionally more.
+
+        `on_progress(done_chunks, total_chunks)` is called after every
+        batch so UIs can show real progress on long transcripts.
         """
         chunks = self._chunks(text)
         if not chunks:
@@ -79,6 +82,9 @@ class FinbertScorer:
                 weight = len(chunk)
                 weighted_probs += probs[row] * weight
                 total_weight += weight
+
+            if on_progress is not None:
+                on_progress(min(b + BATCH_SIZE, len(chunks)), len(chunks))
 
         avg = weighted_probs / total_weight
         labels = [self.model.config.id2label[i] for i in range(len(avg))]
