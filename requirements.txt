@@ -1,3 +1,7 @@
+# CPU-only torch wheels (the default Linux wheel bundles CUDA and is
+# far too large for Streamlit Community Cloud)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 transformers==4.40.0
 torch==2.3.0
 yfinance==1.4.1
@@ -7,4 +11,5 @@ scikit-learn==1.4.2
 streamlit==1.35.0
 plotly==5.22.0
 statsmodels==0.14.6
-datasets==5.0.0
+requests>=2.31
+beautifulsoup4>=4.12

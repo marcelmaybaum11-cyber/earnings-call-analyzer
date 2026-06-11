@@ -59,19 +59,25 @@ def extract_transcript(html: str) -> str:
     return "\n\n".join(p for p in paragraphs if p)
 
 
+def download_transcript(url: str) -> str:
+    """Fetch one transcript page and return the extracted text."""
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    text = extract_transcript(resp.text)
+    if len(text) < 5000:
+        raise RuntimeError(
+            f"Extracted only {len(text)} chars from {url} - page layout "
+            "may have changed."
+        )
+    return text
+
+
 def main() -> None:
     FEATURED_DIR.mkdir(parents=True, exist_ok=True)
     rows = []
     for ticker, company, date, quarter, url in FEATURED_CALLS:
         print(f"Fetching {company} ({ticker}) {quarter}...")
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        text = extract_transcript(resp.text)
-        if len(text) < 5000:
-            raise RuntimeError(
-                f"{ticker}: extracted only {len(text)} chars - page layout "
-                "may have changed."
-            )
+        text = download_transcript(url)
         filename = f"{ticker}_{date}.txt"
         (FEATURED_DIR / filename).write_text(text, encoding="utf-8")
         rows.append(

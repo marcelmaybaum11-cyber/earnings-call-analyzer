@@ -10,8 +10,10 @@ build/
 venv/
 env/
 
-# Data (transcripts may be large or sensitive)
+# Data (transcripts may be large or copyrighted - the app downloads
+# featured ones on demand; manifest.csv stays in the repo)
 data/raw/
+data/featured/*.txt
 
 # Jupyter
 .ipynb_checkpoints/

@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+from fetch_featured import download_transcript
 from fetch_returns import download_close_prices
 from fundamentals import get_fundamentals
 from sentiment import MAX_CHUNK_TOKENS, FinbertScorer
@@ -113,6 +114,26 @@ def get_fundamentals_cached(ticker: str) -> dict:
     return get_fundamentals(ticker)
 
 
+@st.cache_data(show_spinner="Downloading transcript from the source...")
+def get_featured_text(filename: str, source_url: str) -> str:
+    """Read a sample transcript, downloading it on first use.
+
+    Transcripts are not committed to the repo (they are (c) The Motley
+    Fool), so a fresh deployment fetches them from the source on demand
+    and keeps a local copy.
+    """
+    path = FEATURED_DIR / filename
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="replace")
+    text = download_transcript(source_url)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # read-only filesystem - st.cache_data still avoids refetching
+    return text
+
+
 # ----------------------------------------------------------------- sidebar
 
 history = get_history()
@@ -200,8 +221,8 @@ with recent_tab:
         )
         if featured_choice != "— select a call —":
             featured_row = featured.iloc[labels.index(featured_choice)]
-            featured_text = (FEATURED_DIR / featured_row["file"]).read_text(
-                encoding="utf-8", errors="replace"
+            featured_text = get_featured_text(
+                featured_row["file"], featured_row["source"]
             )
             st.caption(
                 f"**{featured_row['company']} {featured_row['quarter']}** "
