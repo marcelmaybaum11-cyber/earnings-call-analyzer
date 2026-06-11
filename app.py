@@ -22,6 +22,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from fetch_returns import download_close_prices
+from fundamentals import get_fundamentals
 from sentiment import MAX_CHUNK_TOKENS, FinbertScorer
 
 DATASET_CSV = Path("data/processed/dataset.csv")
@@ -105,6 +106,11 @@ def get_featured() -> pd.DataFrame | None:
     if not manifest.exists():
         return None
     return pd.read_csv(manifest)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_fundamentals_cached(ticker: str) -> dict:
+    return get_fundamentals(ticker)
 
 
 # ----------------------------------------------------------------- sidebar
@@ -342,11 +348,12 @@ if (analyze or auto_run) and transcript.strip():
                 delta_color="normal" if direction == "UP" else "inverse",
             )
 
-    # ------------------------------------------------- price + projection
+    # ------------------- prediction vs. reality around the call date
 
-    if prices is not None and history is not None and "return_5d" in models:
+    if prices is not None and featured_row is not None and "return_5d" in models:
         st.divider()
-        st.subheader(f"{ticker} - recent price and 5-day statistical projection")
+        st.subheader(f"{ticker} — model prediction vs. what actually happened")
+        call_ts = pd.Timestamp(featured_row["call_date"])
 
         prob_up_5d = float(
             models["return_5d"].predict_proba(
@@ -354,62 +361,242 @@ if (analyze or auto_run) and transcript.strip():
             )[0][1]
         )
         # Expected move = probability-weighted blend of the historical
-        # average up-move and down-move after an earnings call.
-        hist_5d = history["return_5d"].dropna()
-        up_mean = hist_5d[hist_5d > 0].mean()
-        down_mean = hist_5d[hist_5d <= 0].mean()
+        # average post-call up-move and down-move.
+        hist_5d = (
+            history["return_5d"].dropna() if history is not None else pd.Series()
+        )
+        up_mean = hist_5d[hist_5d > 0].mean() if len(hist_5d) else 0.03
+        down_mean = hist_5d[hist_5d <= 0].mean() if len(hist_5d) else -0.03
         expected_5d = prob_up_5d * up_mean + (1 - prob_up_5d) * down_mean
-        band = hist_5d.std()
 
-        last_close = float(prices.iloc[-1])
-        last_date = prices.index[-1]
-        future_dates = pd.bdate_range(
-            last_date + pd.Timedelta(days=1), periods=5
-        )
-        steps = pd.Series(range(1, 6), index=future_dates) / 5.0
-        proj_mid = last_close * (1 + expected_5d * steps)
-        proj_hi = last_close * (1 + (expected_5d + band) * steps)
-        proj_lo = last_close * (1 + (expected_5d - band) * steps)
+        before = prices.loc[:call_ts]
+        if before.empty:
+            st.info("No price data around the call date.")
+        else:
+            # Anchor at the last close on/before the call (calls are after
+            # hours, so this is the price the market reacted from).
+            base_idx = len(before) - 1
+            base_price = float(prices.iloc[base_idx])
+            base_date = prices.index[base_idx]
 
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=prices.index, y=prices.values,
-                name="Close (last 6 months)", line={"color": "#94a3b8"},
+            # Uncertainty cone from the stock's own daily volatility,
+            # widening with sqrt(time): roughly an 80% interval (z=1.28).
+            daily_vol = float(prices.pct_change().std())
+            n_after = min(5, len(prices) - base_idx - 1)
+            cone_dates = prices.index[base_idx + 1 : base_idx + 1 + n_after]
+            mid, hi, lo = [], [], []
+            for t in range(1, n_after + 1):
+                drift = expected_5d * t / 5
+                spread = 1.28 * daily_vol * t**0.5
+                mid.append(base_price * (1 + drift))
+                hi.append(base_price * (1 + drift + spread))
+                lo.append(base_price * (1 + drift - spread))
+
+            actual_1d = (
+                float(prices.iloc[base_idx + 1] / base_price - 1)
+                if n_after >= 1 else None
             )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[last_date, *future_dates], y=[last_close, *proj_hi],
-                line={"width": 0}, showlegend=False, hoverinfo="skip",
+            actual_5d = (
+                float(prices.iloc[base_idx + 5] / base_price - 1)
+                if n_after >= 5 else None
             )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[last_date, *future_dates], y=[last_close, *proj_lo],
-                fill="tonexty", fillcolor="rgba(59,130,246,0.15)",
-                line={"width": 0}, name="±1σ historical range",
+            predicted_up = prob_up_5d >= 0.5
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric(
+                "Model said (5-day)",
+                "📈 UP" if predicted_up else "📉 DOWN",
+                f"{(prob_up_5d if predicted_up else 1 - prob_up_5d):.0%} confidence",
+                delta_color="off",
             )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[last_date, *future_dates], y=[last_close, *proj_mid],
-                name=f"Projection ({expected_5d:+.1%} expected)",
-                line={"color": "#60a5fa", "dash": "dash"},
+            if actual_1d is not None:
+                c2.metric("Actually, next day", f"{actual_1d:+.2%}")
+            if actual_5d is not None:
+                hit = (actual_5d > 0) == predicted_up
+                c3.metric(
+                    "Actually, 5 days",
+                    f"{actual_5d:+.2%}",
+                    "✅ direction hit" if hit else "❌ direction miss",
+                    delta_color="normal" if hit else "inverse",
+                )
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=prices.index, y=prices.values,
+                    name="Close", line={"color": "#94a3b8"},
+                )
             )
-        )
-        fig.update_layout(
-            height=420,
-            margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(orientation="h", y=1.05),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            f"Projection = model's up-probability ({prob_up_5d:.0%}) blended "
-            "with the average historical post-call up/down move; the shaded "
-            "band is ±1 standard deviation of historical 5-day returns. "
-            "A statistical illustration, not a forecast."
-        )
+            fig.add_trace(
+                go.Scatter(
+                    x=[base_date, *cone_dates], y=[base_price, *hi],
+                    line={"width": 0}, showlegend=False, hoverinfo="skip",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[base_date, *cone_dates], y=[base_price, *lo],
+                    fill="tonexty", fillcolor="rgba(96,165,250,0.18)",
+                    line={"width": 0}, name="~80% expected range",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[base_date, *cone_dates], y=[base_price, *mid],
+                    name=f"Model path ({expected_5d:+.1%} expected)",
+                    line={"color": "#60a5fa", "dash": "dash"},
+                )
+            )
+            fig.add_vline(x=base_date, line_dash="dot", line_color="#f59e0b")
+            fig.add_annotation(
+                x=base_date, y=1.02, yref="paper", showarrow=False,
+                text="earnings call", font={"color": "#f59e0b"},
+            )
+            # Zoom to the weeks around the call; users can zoom out.
+            fig.update_xaxes(
+                range=[call_ts - pd.Timedelta(days=45),
+                       min(call_ts + pd.Timedelta(days=20),
+                           prices.index[-1] + pd.Timedelta(days=2))]
+            )
+            window = prices.loc[
+                call_ts - pd.Timedelta(days=45):
+                call_ts + pd.Timedelta(days=20)
+            ]
+            fig.update_yaxes(
+                range=[window.min() * 0.96, window.max() * 1.04]
+            )
+            fig.update_layout(
+                height=420,
+                margin=dict(l=0, r=0, t=24, b=0),
+                legend=dict(orientation="h", y=1.08),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "The dashed line is the path implied by the model's "
+                f"up-probability ({prob_up_5d:.0%}) blended with average "
+                "historical post-call moves; the cone widens with the "
+                "stock's own daily volatility (~80% interval). The gray "
+                "line is what the stock actually did."
+            )
+
+    # ------------------------------------- fundamentals and fair value
+
+    if ticker:
+        st.divider()
+        st.subheader(f"{ticker} — key fundamentals & fair value")
+        try:
+            funda = get_fundamentals_cached(ticker)
+        except Exception as exc:
+            funda = None
+            st.warning(f"Could not fetch fundamentals: {exc}")
+
+        if funda:
+            m = funda["metrics"]
+            fv = funda["fair_value"]
+
+            def fmt_big(x):
+                if x is None:
+                    return "n/a"
+                for unit, div in (("T", 1e12), ("B", 1e9), ("M", 1e6)):
+                    if abs(x) >= div:
+                        return f"${x / div:,.2f}{unit}"
+                return f"${x:,.0f}"
+
+            def fmt_pct(x):
+                return f"{x:.1%}" if x is not None else "n/a"
+
+            def fmt_num(x, prefix=""):
+                return f"{prefix}{x:,.2f}" if x is not None else "n/a"
+
+            r1 = st.columns(4)
+            r1[0].metric("Price", fmt_num(m["currentPrice"], "$"))
+            r1[1].metric("Market cap", fmt_big(m["marketCap"]))
+            r1[2].metric("P/E trailing", fmt_num(m["trailingPE"]))
+            r1[3].metric("P/E forward", fmt_num(m["forwardPE"]))
+            r2 = st.columns(4)
+            r2[0].metric("Revenue growth", fmt_pct(m["revenueGrowth"]))
+            r2[1].metric("Profit margin", fmt_pct(m["profitMargins"]))
+            r2[2].metric("Return on equity", fmt_pct(m["returnOnEquity"]))
+            r2[3].metric("Free cash flow", fmt_big(m["freeCashflow"]))
+
+            current = fv["current"]
+            if current and fv["analyst_mean"]:
+                st.markdown("##### Fair value estimates")
+                col_chart, col_nums = st.columns([2, 1])
+
+                with col_chart:
+                    fig = go.Figure()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[fv["analyst_low"], fv["analyst_high"]],
+                            y=["", ""],
+                            mode="lines",
+                            line={"color": "rgba(148,163,184,0.6)", "width": 6},
+                            name="Analyst range",
+                        )
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[fv["analyst_mean"]], y=[""],
+                            mode="markers+text",
+                            marker={"size": 16, "color": "#34d399"},
+                            text=["mean target"], textposition="top center",
+                            name="Analyst mean",
+                        )
+                    )
+                    if fv["lynch"]:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[fv["lynch"]], y=[""],
+                                mode="markers+text",
+                                marker={"size": 14, "color": "#a78bfa",
+                                        "symbol": "diamond"},
+                                text=["PEG=1 value"], textposition="bottom center",
+                                name="Lynch fair value",
+                            )
+                        )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[current], y=[""],
+                            mode="markers+text",
+                            marker={"size": 16, "color": "#60a5fa",
+                                    "symbol": "line-ns", "line": {"width": 3}},
+                            text=["current"], textposition="top center",
+                            name="Current price",
+                        )
+                    )
+                    fig.update_layout(
+                        height=170, showlegend=False,
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        xaxis={"tickprefix": "$"}, yaxis={"visible": False},
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with col_nums:
+                    upside = fv["analyst_mean"] / current - 1
+                    st.metric(
+                        f"Analyst mean target ({fv['analyst_count']} analysts)",
+                        f"${fv['analyst_mean']:,.0f}",
+                        f"{upside:+.1%} vs current",
+                    )
+                    if fv["lynch"]:
+                        st.metric(
+                            "Lynch fair value (PEG = 1)",
+                            f"${fv['lynch']:,.0f}",
+                            f"{fv['lynch'] / current - 1:+.1%} vs current",
+                        )
+                    if fv["recommendation"]:
+                        st.caption(
+                            "Street consensus: "
+                            f"**{fv['recommendation'].replace('_', ' ').title()}**"
+                        )
+                st.caption(
+                    "Fair value here is illustrative: the analyst range is "
+                    "Yahoo's aggregate of published 12-month targets; the "
+                    "Lynch estimate assumes a stock is fairly priced when "
+                    "P/E equals earnings growth (PEG = 1, growth capped at "
+                    "50%). Neither is investment advice."
+                )
 
     # ------------------------------------------------------------- history
 
