@@ -35,6 +35,36 @@ st.set_page_config(
     layout="wide",
 )
 
+# Design polish: centered content column, gradient hero, pill-style tabs,
+# full-width primary button. Kept in one place so it is easy to tweak.
+st.markdown(
+    """
+    <style>
+    .block-container { max-width: 1100px; padding-top: 2.2rem; }
+    .hero-title {
+        font-size: 2.7rem; font-weight: 800; line-height: 1.15;
+        background: linear-gradient(90deg, #60a5fa, #34d399);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        margin-bottom: 0.2rem;
+    }
+    .hero-sub { color: #94a3b8; font-size: 1.02rem; margin-bottom: 1.4rem; }
+    .stTabs [data-baseweb="tab-list"] { gap: 0.5rem; }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(148, 163, 184, 0.12); border-radius: 999px;
+        padding: 0.35rem 1.1rem;
+    }
+    .stTabs [aria-selected="true"] { background: #3b82f6; }
+    .stTabs [aria-selected="true"] p { color: #ffffff; }
+    .stTabs [data-baseweb="tab-highlight"],
+    .stTabs [data-baseweb="tab-border"] { display: none; }
+    .stButton > button[kind="primary"] {
+        border-radius: 10px; padding: 0.55rem 1rem; font-weight: 600;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ----------------------------------------------------------------- caching
 
 
@@ -120,14 +150,16 @@ with st.sidebar:
 
 # ------------------------------------------------------------------- input
 
-st.title("📈 Earnings Call Tone & Post-Call Return Analyzer")
-st.caption(
-    "FinBERT sentiment analysis of earnings call transcripts + "
-    "return-direction prediction validated on 188 real calls (2016-2020)."
+st.markdown(
+    '<div class="hero-title">Earnings Call Tone Analyzer</div>'
+    '<div class="hero-sub">FinBERT sentiment on any earnings call '
+    "transcript, with a return-direction prediction validated on 188 real "
+    "calls.</div>",
+    unsafe_allow_html=True,
 )
 
 paste_tab, upload_tab, recent_tab = st.tabs(
-    ["✍️ Paste transcript", "📄 Upload file", "📞 Recent earnings calls"]
+    ["✏️ Paste text", "📂 Upload file", "⚡ Sample calls"]
 )
 with paste_tab:
     pasted = st.text_area(
@@ -138,7 +170,7 @@ with paste_tab:
     )
 with upload_tab:
     uploaded = st.file_uploader(
-        "Upload a transcript (.txt or .md)", type=["txt", "md"]
+        "Drag & drop a transcript file (.txt / .md)", type=["txt", "md"]
     )
 
 featured_row = None
@@ -180,20 +212,12 @@ elif uploaded is not None:
 elif pasted.strip():
     transcript = pasted
 
-col_ticker, col_button = st.columns([1, 3])
-with col_ticker:
-    ticker = st.text_input(
-        "Stock ticker (optional)",
-        placeholder="e.g. AAPL",
-        help="Adds the stock's recent price chart and a 5-day projection.",
-    ).strip().upper()
-with col_button:
-    st.write("")  # vertical alignment
-    analyze = st.button("Analyze", type="primary", use_container_width=False)
+analyze = st.button("Analyze transcript", type="primary", use_container_width=True)
 
-# A featured call analyzes itself as soon as it is picked - no extra click.
-if featured_row is not None and not ticker:
-    ticker = str(featured_row["ticker"])
+# The price chart needs a ticker, which we only know for sample calls.
+ticker = str(featured_row["ticker"]) if featured_row is not None else ""
+
+# A sample call analyzes itself as soon as it is picked - no extra click.
 auto_run = (
     featured_row is not None
     and st.session_state.get("last_featured") != featured_choice
