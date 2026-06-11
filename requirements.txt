@@ -3,7 +3,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 transformers==4.40.0
-torch==2.3.0
+torch==2.3.0+cpu
 yfinance==1.4.1
 pandas==2.2.2
 numpy==1.26.4
