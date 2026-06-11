@@ -26,6 +26,7 @@ from sentiment import MAX_CHUNK_TOKENS, FinbertScorer
 
 DATASET_CSV = Path("data/processed/dataset.csv")
 MODELS_DIR = Path("models")
+FEATURED_DIR = Path("data/featured")
 HORIZONS = {"return_1d": "1 day", "return_5d": "5 days"}
 
 st.set_page_config(
@@ -68,6 +69,14 @@ def get_recent_prices(ticker: str) -> pd.Series:
     return download_close_prices(ticker, today - pd.Timedelta(days=180), today)
 
 
+@st.cache_data
+def get_featured() -> pd.DataFrame | None:
+    manifest = FEATURED_DIR / "manifest.csv"
+    if not manifest.exists():
+        return None
+    return pd.read_csv(manifest)
+
+
 # ----------------------------------------------------------------- sidebar
 
 history = get_history()
@@ -102,6 +111,10 @@ with st.sidebar:
         )
     st.divider()
     st.caption(
+        "🌙 Dark theme is the default - switch to light mode via the "
+        "menu (top right) → Settings → Theme."
+    )
+    st.caption(
         "Educational project - a statistical exercise, not investment advice."
     )
 
@@ -113,7 +126,9 @@ st.caption(
     "return-direction prediction validated on 188 real calls (2016-2020)."
 )
 
-paste_tab, upload_tab = st.tabs(["✍️ Paste transcript", "📄 Upload file"])
+paste_tab, upload_tab, recent_tab = st.tabs(
+    ["✍️ Paste transcript", "📄 Upload file", "📞 Recent earnings calls"]
+)
 with paste_tab:
     pasted = st.text_area(
         "Transcript text",
@@ -126,8 +141,40 @@ with upload_tab:
         "Upload a transcript (.txt or .md)", type=["txt", "md"]
     )
 
+featured_row = None
+featured_text = ""
+featured_choice = "— select a call —"
+with recent_tab:
+    featured = get_featured()
+    if featured is None:
+        st.info(
+            "No featured calls downloaded yet. Run "
+            "`.venv\\Scripts\\python.exe src\\fetch_featured.py` first."
+        )
+    else:
+        labels = [
+            f"{r.company} ({r.ticker}) — {r.quarter} · {r.call_date}"
+            for r in featured.itertuples()
+        ]
+        featured_choice = st.selectbox(
+            "Pick a recent call - it is analyzed automatically:",
+            ["— select a call —", *labels],
+        )
+        if featured_choice != "— select a call —":
+            featured_row = featured.iloc[labels.index(featured_choice)]
+            featured_text = (FEATURED_DIR / featured_row["file"]).read_text(
+                encoding="utf-8", errors="replace"
+            )
+            st.caption(
+                f"**{featured_row['company']} {featured_row['quarter']}** "
+                f"({len(featured_text):,} characters) — source: "
+                f"[The Motley Fool]({featured_row['source']})"
+            )
+
 transcript = ""
-if uploaded is not None:
+if featured_row is not None:
+    transcript = featured_text
+elif uploaded is not None:
     transcript = uploaded.read().decode("utf-8", errors="replace")
     st.caption(f"Loaded **{uploaded.name}** ({len(transcript):,} characters)")
 elif pasted.strip():
@@ -144,9 +191,19 @@ with col_button:
     st.write("")  # vertical alignment
     analyze = st.button("Analyze", type="primary", use_container_width=False)
 
+# A featured call analyzes itself as soon as it is picked - no extra click.
+if featured_row is not None and not ticker:
+    ticker = str(featured_row["ticker"])
+auto_run = (
+    featured_row is not None
+    and st.session_state.get("last_featured") != featured_choice
+)
+if auto_run:
+    st.session_state["last_featured"] = featured_choice
+
 # ---------------------------------------------------------------- analysis
 
-if analyze and transcript.strip():
+if (analyze or auto_run) and transcript.strip():
     scorer = get_scorer()
 
     with st.status("Analyzing transcript...", expanded=True) as status:
@@ -214,7 +271,6 @@ if analyze and transcript.strip():
             xaxis_tickformat=".0%",
             height=230,
             margin=dict(l=0, r=0, t=10, b=0),
-            template="plotly_white",
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -227,11 +283,12 @@ if analyze and transcript.strip():
                 number={"suffix": "%", "font": {"size": 36}},
                 gauge={
                     "axis": {"range": [-50, 50], "ticksuffix": "%"},
-                    "bar": {"color": "#0f172a"},
+                    "bar": {"color": "#3b82f6"},
+                    # translucent zones read well on dark and light themes
                     "steps": [
-                        {"range": [-50, -10], "color": "#fecaca"},
-                        {"range": [-10, 10], "color": "#e2e8f0"},
-                        {"range": [10, 50], "color": "#bbf7d0"},
+                        {"range": [-50, -10], "color": "rgba(220,38,38,0.35)"},
+                        {"range": [-10, 10], "color": "rgba(148,163,184,0.25)"},
+                        {"range": [10, 50], "color": "rgba(22,163,74,0.35)"},
                     ],
                 },
             )
@@ -294,7 +351,7 @@ if analyze and transcript.strip():
         fig.add_trace(
             go.Scatter(
                 x=prices.index, y=prices.values,
-                name="Close (last 6 months)", line={"color": "#0f172a"},
+                name="Close (last 6 months)", line={"color": "#94a3b8"},
             )
         )
         fig.add_trace(
@@ -314,11 +371,11 @@ if analyze and transcript.strip():
             go.Scatter(
                 x=[last_date, *future_dates], y=[last_close, *proj_mid],
                 name=f"Projection ({expected_5d:+.1%} expected)",
-                line={"color": "#2563eb", "dash": "dash"},
+                line={"color": "#60a5fa", "dash": "dash"},
             )
         )
         fig.update_layout(
-            template="plotly_white", height=420,
+            height=420,
             margin=dict(l=0, r=0, t=10, b=0),
             legend=dict(orientation="h", y=1.05),
         )
@@ -354,9 +411,7 @@ if analyze and transcript.strip():
                     line_color="black",
                     annotation_text="this transcript",
                 )
-                fig.update_layout(
-                    yaxis_tickformat=".0%", height=450, template="plotly_white"
-                )
+                fig.update_layout(yaxis_tickformat=".0%", height=450)
                 st.plotly_chart(fig, use_container_width=True)
 elif analyze:
     st.warning("Paste a transcript or upload a file first.")

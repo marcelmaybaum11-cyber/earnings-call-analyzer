@@ -1,0 +1,11 @@
+# App theme: professional dark by default.
+# Users can switch to light mode in the app menu (top right) -> Settings.
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1b2130"
+textColor = "#e2e8f0"
+
+[server]
+headless = true

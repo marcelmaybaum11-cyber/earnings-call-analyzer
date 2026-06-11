@@ -1,0 +1,6 @@
+ticker,company,call_date,quarter,file,source
+NVDA,NVIDIA,2026-05-20,Q1 FY2027,NVDA_2026-05-20.txt,https://www.fool.com/earnings/call-transcripts/2026/05/20/nvidia-nvda-q1-2027-earnings-transcript/
+AAPL,Apple,2026-04-30,Q2 FY2026,AAPL_2026-04-30.txt,https://www.fool.com/earnings/call-transcripts/2026/04/30/apple-aapl-q2-2026-earnings-call-transcript/
+MSFT,Microsoft,2026-04-29,Q3 FY2026,MSFT_2026-04-29.txt,https://www.fool.com/earnings/call-transcripts/2026/04/29/microsoft-msft-q3-2026-earnings-transcript/
+AMZN,Amazon,2026-04-29,Q1 2026,AMZN_2026-04-29.txt,https://www.fool.com/earnings/call-transcripts/2026/04/29/amazon-amzn-q1-2026-earnings-call-transcript/
+GOOGL,Alphabet,2026-04-29,Q1 2026,GOOGL_2026-04-29.txt,https://www.fool.com/earnings/call-transcripts/2026/04/29/alphabet-googl-q1-2026-earnings-call-transcript/
