@@ -115,6 +115,9 @@ st.markdown(
         border-radius: 14px; padding: 0.85rem 1rem;
         min-height: 8.2rem;
     }
+    [data-testid="stExpander"] details {
+        border-radius: 14px; border-color: rgba(148, 163, 184, 0.25);
+    }
     .step-num {
         font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
         text-transform: uppercase; color: #60a5fa; margin-bottom: 0.15rem;
@@ -277,6 +280,8 @@ for col, (num, title, text) in zip(step_cols, steps):
         f'<div class="step-text">{text}</div></div>',
         unsafe_allow_html=True,
     )
+
+st.write("")
 
 with st.expander("🔍 What exactly happens under the hood?"):
     st.markdown(
