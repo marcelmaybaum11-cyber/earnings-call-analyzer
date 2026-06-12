@@ -9,6 +9,7 @@ build/
 .venv/
 venv/
 env/
+requirements-frozen.txt
 
 # Data (transcripts may be large or copyrighted - the app downloads
 # featured ones on demand; manifest.csv stays in the repo)
