@@ -32,7 +32,7 @@ FEATURED_DIR = Path("data/featured")
 HORIZONS = {"return_1d": "1 day", "return_5d": "5 days"}
 
 st.set_page_config(
-    page_title="Earnings Call Tone Analyzer",
+    page_title="Earnings Call Analyzer",
     page_icon="📈",
     layout="wide",
 )
@@ -178,7 +178,7 @@ with st.sidebar:
 # ------------------------------------------------------------------- input
 
 st.markdown(
-    '<div class="hero-title">Earnings Call Tone Analyzer</div>'
+    '<div class="hero-title">Earnings Call Analyzer</div>'
     '<div class="hero-sub">FinBERT sentiment on any earnings call '
     "transcript, with a return-direction prediction validated on 188 real "
     "calls.</div>",

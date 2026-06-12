@@ -1,4 +1,4 @@
-# AI Earnings Call Sentiment Analyzer
+# Earnings Call Analyzer
 
 Does management tone on an earnings call predict the stock's move in the
 days that follow? This project scores earnings call transcripts with
