@@ -112,7 +112,8 @@ st.markdown(
     .step-card {
         background: rgba(148, 163, 184, 0.10);
         border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 14px; padding: 0.85rem 1rem; height: 100%;
+        border-radius: 14px; padding: 0.85rem 1rem;
+        min-height: 8.2rem;
     }
     .step-num {
         font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
@@ -263,9 +264,8 @@ steps = [
      "(512 tokens each) so no part of the call is skipped."),
     ("Step 2", "Score", "FinBERT, an AI model trained on financial text, "
      "rates every piece as positive, negative, or neutral."),
-    ("Step 3", "Dissect", "Tone is tracked through the call, the scripted "
-     "opening is compared with the unscripted Q&A, and hedging words are "
-     "counted."),
+    ("Step 3", "Dissect", "Tone is tracked through the call: prepared "
+     "remarks vs. Q&A, plus a count of hedging words."),
     ("Step 4", "Predict", "A model trained on 188 real calls turns the "
      "scores into an up/down call for the days after."),
 ]
