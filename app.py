@@ -10,6 +10,9 @@ Run from the project root:
     .venv\\Scripts\\streamlit run app.py
 """
 
+import html
+import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -24,12 +27,56 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from fetch_featured import download_transcript
 from fetch_returns import download_close_prices
 from fundamentals import get_fundamentals
-from sentiment import MAX_CHUNK_TOKENS, FinbertScorer
+from sentiment import MAX_CHUNK_TOKENS, FinbertScorer, aggregate
 
 DATASET_CSV = Path("data/processed/dataset.csv")
 MODELS_DIR = Path("models")
 FEATURED_DIR = Path("data/featured")
 HORIZONS = {"return_1d": "1 day", "return_5d": "5 days"}
+GITHUB_URL = "https://github.com/marcelmaybaum11-cyber/earnings-call-analyzer"
+
+# Transcripts usually announce the Q&A part with a heading like
+# "Questions and Answers" or "Question-and-Answer Session".
+QA_MARKER = re.compile(
+    r"question[-\s]?(?:s)?[-\s]?(?:and|&)[-\s]?answer", re.IGNORECASE
+)
+
+# Words that signal hedging / uncertainty, in the spirit of the
+# Loughran-McDonald financial sentiment word lists. A high density means
+# management is qualifying its statements a lot.
+HEDGING_WORDS = frozenset(
+    """approximately assume assumed assumes believe believes anticipate
+    anticipates caution cautious challenging could depend depending depends
+    estimate estimated estimates expect expects headwind headwinds may might
+    possibly probable probably risk riskier risks uncertain uncertainties
+    uncertainty unclear unknown volatile volatility""".split()
+)
+
+
+def split_sections(text: str) -> list[tuple[str, str]]:
+    """Split a transcript into prepared remarks and Q&A, if possible.
+
+    Earnings calls have two very different halves: a scripted opening
+    statement and an unscripted Q&A with analysts. Comparing their tone is
+    informative because the Q&A is harder to polish. If no Q&A heading is
+    found (or it sits implausibly close to either end), the whole text is
+    treated as one section.
+    """
+    match = QA_MARKER.search(text)
+    if match and 0.05 * len(text) < match.start() < 0.95 * len(text):
+        return [
+            ("Prepared remarks", text[: match.start()]),
+            ("Q&A session", text[match.start() :]),
+        ]
+    return [("Full call", text)]
+
+
+def hedging_density(text: str) -> tuple[int, int, float]:
+    """Return (hedge_count, word_count, hedges per 1,000 words)."""
+    words = re.findall(r"[a-z']+", text.lower())
+    hedges = sum(word in HEDGING_WORDS for word in words)
+    per_1000 = hedges / len(words) * 1000 if words else 0.0
+    return hedges, len(words), per_1000
 
 st.set_page_config(
     page_title="Earnings Call Analyzer",
@@ -62,6 +109,31 @@ st.markdown(
     .stButton > button[kind="primary"] {
         border-radius: 10px; padding: 0.55rem 1rem; font-weight: 600;
     }
+    .step-card {
+        background: rgba(148, 163, 184, 0.10);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 14px; padding: 0.85rem 1rem; height: 100%;
+    }
+    .step-num {
+        font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+        text-transform: uppercase; color: #60a5fa; margin-bottom: 0.15rem;
+    }
+    .step-title { font-weight: 700; margin-bottom: 0.15rem; }
+    .step-text { color: #94a3b8; font-size: 0.85rem; line-height: 1.35; }
+    .excerpt {
+        border-left: 4px solid; border-radius: 0 10px 10px 0;
+        background: rgba(148, 163, 184, 0.08);
+        padding: 0.7rem 0.9rem; font-size: 0.9rem; font-style: italic;
+        color: inherit;
+    }
+    .excerpt-pos { border-color: #16a34a; }
+    .excerpt-neg { border-color: #dc2626; }
+    .footer {
+        text-align: center; color: #64748b; font-size: 0.88rem;
+        margin-top: 3rem; padding-top: 1.2rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .footer a { color: #60a5fa; text-decoration: none; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -179,11 +251,65 @@ with st.sidebar:
 
 st.markdown(
     '<div class="hero-title">Earnings Call Analyzer</div>'
-    '<div class="hero-sub">FinBERT sentiment on any earnings call '
-    "transcript, with a return-direction prediction validated on 188 real "
-    "calls.</div>",
+    '<div class="hero-sub">Drop in any earnings call transcript and get '
+    "the full picture: management tone, how it shifts through the call, "
+    "prepared remarks vs. Q&amp;A, hedging language, standout quotes, and "
+    "a return-direction prediction validated on 188 real calls.</div>",
     unsafe_allow_html=True,
 )
+
+steps = [
+    ("Step 1", "Read", "The transcript is split into BERT-sized pieces "
+     "(512 tokens each) so no part of the call is skipped."),
+    ("Step 2", "Score", "FinBERT, an AI model trained on financial text, "
+     "rates every piece as positive, negative, or neutral."),
+    ("Step 3", "Dissect", "Tone is tracked through the call, the scripted "
+     "opening is compared with the unscripted Q&A, and hedging words are "
+     "counted."),
+    ("Step 4", "Predict", "A model trained on 188 real calls turns the "
+     "scores into an up/down call for the days after."),
+]
+step_cols = st.columns(4)
+for col, (num, title, text) in zip(step_cols, steps):
+    col.markdown(
+        f'<div class="step-card"><div class="step-num">{num}</div>'
+        f'<div class="step-title">{title}</div>'
+        f'<div class="step-text">{text}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with st.expander("🔍 What exactly happens under the hood?"):
+    st.markdown(
+        """
+**The idea.** When executives discuss results, *how* they say things
+carries information beyond the numbers: confident language tends to
+accompany good quarters, hedged and defensive language bad ones. This tool
+measures that tone objectively and tests whether it predicts the stock's
+next move.
+
+**Tone scoring.** [FinBERT](https://huggingface.co/ProsusAI/finbert) is a
+BERT language model fine-tuned on financial text, so it knows that
+*"headwinds"* is bad news and *"raised guidance"* is good news even though
+neither contains an obviously emotional word. BERT can only read 512
+tokens at a time, so the transcript is chunked, every chunk is scored, and
+the scores are combined weighted by chunk length. The **net sentiment**
+shown everywhere is simply *positive − negative* probability.
+
+**The prediction.** A logistic regression was trained on 188 real
+earnings calls (10 large-cap tech companies, 2016-2020): FinBERT scores in,
+actual post-call returns out. In 5-fold cross-validation it called the
+5-day direction correctly **63.4%** of the time vs. **53.7%** for always
+guessing the majority class - a real but modest edge, exactly what you
+would expect from tone alone.
+
+**What it does not do.** It does not read the actual numbers (EPS, revenue,
+guidance), so a beat with cautious language can confuse it - and tone
+partly proxies for the surprise itself. Treat the prediction as a
+statistical exercise, not investment advice.
+        """
+    )
+
+st.write("")
 
 paste_tab, upload_tab, recent_tab = st.tabs(
     ["✏️ Paste text", "📂 Upload file", "⚡ Sample calls"]
@@ -261,27 +387,49 @@ if (analyze or auto_run) and transcript.strip():
         t0 = time.time()
 
         st.write("**Step 1 - Tokenizing** the transcript with BERT's tokenizer...")
-        chunks = scorer._chunks(transcript)
-        n_tokens = sum(len(c) for c in chunks)
+        sections = split_sections(transcript)
+        section_chunk_counts = [
+            len(scorer._chunks(text)) for _, text in sections
+        ]
+        total_chunks = sum(section_chunk_counts)
+        n_tokens = len(
+            scorer.tokenizer.encode(transcript, add_special_tokens=False)
+        )
         st.write(
             f"→ {len(transcript):,} characters → **{n_tokens:,} tokens**, "
-            f"split into **{len(chunks)} chunks** of ≤{MAX_CHUNK_TOKENS} "
+            f"split into **{total_chunks} chunks** of ≤{MAX_CHUNK_TOKENS} "
             "tokens (BERT's hard limit is 512 per pass)."
         )
+        if len(sections) == 2:
+            st.write(
+                "→ Found a Q&A heading - prepared remarks and the Q&A "
+                "session will also be scored separately."
+            )
 
         st.write("**Step 2 - Scoring** every chunk through FinBERT...")
-        bar = st.progress(0.0, text=f"0 / {len(chunks)} chunks")
-        scores = scorer.score(
-            transcript,
-            on_progress=lambda done, total: bar.progress(
-                done / total, text=f"{done} / {total} chunks"
-            ),
-        )
+        bar = st.progress(0.0, text=f"0 / {total_chunks} chunks")
+        section_scores: dict[str, dict] = {}
+        all_chunk_scores: list[dict] = []
+        done_offset = 0
+        for (name, text), n_chunks in zip(sections, section_chunk_counts):
+            chunk_scores = scorer.score_chunks(
+                text,
+                on_progress=lambda done, _total, off=done_offset: bar.progress(
+                    (off + done) / total_chunks,
+                    text=f"{off + done} / {total_chunks} chunks",
+                ),
+            )
+            section_scores[name] = aggregate(chunk_scores)
+            all_chunk_scores.extend(chunk_scores)
+            done_offset += n_chunks
+
+        scores = aggregate(all_chunk_scores)
         net = scores["positive"] - scores["negative"]
         st.write(
             "**Step 3 - Aggregating**: chunk scores combined with a "
             f"length-weighted average → net sentiment **{net:+.1%}**."
         )
+        hedge_count, n_words, hedge_per_1000 = hedging_density(transcript)
 
         prices = None
         if ticker:
@@ -299,6 +447,17 @@ if (analyze or auto_run) and transcript.strip():
         )
 
     # ------------------------------------------------------------- results
+
+    # Up-probability per horizon, computed once and reused by the metric
+    # cards, the prediction-vs-reality chart, and the downloadable report.
+    predictions = {
+        horizon: float(
+            model.predict_proba(
+                [[scores["positive"], scores["negative"]]]
+            )[0][1]
+        )
+        for horizon, model in models.items()
+    }
 
     st.divider()
     left, mid, right = st.columns([1.2, 1, 1])
@@ -353,13 +512,9 @@ if (analyze or auto_run) and transcript.strip():
         if not models:
             st.info("No trained models found - run `src\\model.py` first.")
         for horizon, label in HORIZONS.items():
-            if horizon not in models:
+            if horizon not in predictions:
                 continue
-            prob_up = float(
-                models[horizon].predict_proba(
-                    [[scores["positive"], scores["negative"]]]
-                )[0][1]
-            )
+            prob_up = predictions[horizon]
             direction = "UP" if prob_up >= 0.5 else "DOWN"
             confidence = prob_up if prob_up >= 0.5 else 1 - prob_up
             st.metric(
@@ -369,18 +524,153 @@ if (analyze or auto_run) and transcript.strip():
                 delta_color="normal" if direction == "UP" else "inverse",
             )
 
+    # --------------------------- tone through the call & language check
+
+    st.divider()
+    chunk_token_total = sum(c["tokens"] for c in all_chunk_scores)
+    chart_col, stats_col = st.columns([1.8, 1])
+
+    with chart_col:
+        st.subheader("How tone moved through the call")
+        if total_chunks >= 3:
+            cum = 0
+            positions, chunk_nets = [], []
+            for c in all_chunk_scores:
+                positions.append((cum + c["tokens"] / 2) / chunk_token_total * 100)
+                chunk_nets.append(c["positive"] - c["negative"])
+                cum += c["tokens"]
+            fig = go.Figure(
+                go.Scatter(
+                    x=positions,
+                    y=chunk_nets,
+                    mode="lines+markers",
+                    line={"color": "#60a5fa"},
+                    fill="tozeroy",
+                    fillcolor="rgba(96,165,250,0.12)",
+                    hovertemplate="%{x:.0f}% through the call: "
+                    "net %{y:+.0%}<extra></extra>",
+                )
+            )
+            fig.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
+            if len(sections) == 2:
+                qa_start_pct = (
+                    sum(
+                        c["tokens"]
+                        for c in all_chunk_scores[: section_chunk_counts[0]]
+                    )
+                    / chunk_token_total
+                    * 100
+                )
+                fig.add_vline(
+                    x=qa_start_pct, line_dash="dash", line_color="#f59e0b"
+                )
+                fig.add_annotation(
+                    x=qa_start_pct, y=1.06, yref="paper", showarrow=False,
+                    text="Q&A starts", font={"color": "#f59e0b"},
+                )
+            fig.update_layout(
+                height=320,
+                margin=dict(l=0, r=0, t=30, b=0),
+                xaxis_title="position in the call (%)",
+                yaxis_title="net sentiment",
+                yaxis_tickformat="+.0%",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "Each point is one ~510-token chunk. Watch for tone fading "
+                "late in the call - that is usually the Q&A getting tough."
+            )
+        else:
+            st.info(
+                "The transcript is too short for a tone timeline - it "
+                "needs at least 3 chunks (~1,500 tokens)."
+            )
+
+    with stats_col:
+        st.subheader("Language check")
+        if len(sections) == 2:
+            prep = section_scores["Prepared remarks"]
+            qa = section_scores["Q&A session"]
+            prep_net = prep["positive"] - prep["negative"]
+            qa_net = qa["positive"] - qa["negative"]
+            c1, c2 = st.columns(2)
+            c1.metric("Prepared remarks", f"{prep_net:+.1%}")
+            c2.metric(
+                "Q&A session",
+                f"{qa_net:+.1%}",
+                f"{qa_net - prep_net:+.1%} vs script",
+            )
+            st.caption(
+                "The opening statement is scripted and polished; the Q&A "
+                "is not. A tone drop in the Q&A suggests the confidence "
+                "lived mostly in the script."
+            )
+        c1, c2 = st.columns(2)
+        c1.metric("Words", f"{n_words:,}")
+        c2.metric(
+            "Hedging density",
+            f"{hedge_per_1000:.1f}",
+            f"{hedge_count} hedges / 1,000 words",
+            delta_color="off",
+        )
+        st.caption(
+            "Hedging counts qualifiers like *approximately, expect, risk, "
+            "uncertain*. The number itself matters less than comparing "
+            "calls: a sudden jump vs. last quarter means management is "
+            "qualifying far more statements than usual."
+        )
+
+    # ------------------------------------------------- standout passages
+
+    if len(all_chunk_scores) >= 2:
+        st.divider()
+        st.subheader("Standout passages")
+        best = max(all_chunk_scores, key=lambda c: c["positive"] - c["negative"])
+        worst = min(all_chunk_scores, key=lambda c: c["positive"] - c["negative"])
+
+        def excerpt(chunk: dict, limit: int = 460) -> str:
+            text = " ".join(chunk["text"].split())
+            if len(text) > limit:
+                text = text[:limit].rsplit(" ", 1)[0] + " …"
+            return html.escape(text)
+
+        pos_col, neg_col = st.columns(2)
+        with pos_col:
+            st.markdown(
+                "**🌤️ Most positive** "
+                f"(net {best['positive'] - best['negative']:+.0%})"
+            )
+            st.markdown(
+                f'<div class="excerpt excerpt-pos">{excerpt(best)}</div>',
+                unsafe_allow_html=True,
+            )
+        with neg_col:
+            st.markdown(
+                "**⛈️ Most negative** "
+                f"(net {worst['positive'] - worst['negative']:+.0%})"
+            )
+            st.markdown(
+                f'<div class="excerpt excerpt-neg">{excerpt(worst)}</div>',
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "The chunks FinBERT scored highest and lowest. Punctuation can "
+            "look slightly off because the text is reconstructed from "
+            "BERT tokens."
+        )
+
     # ------------------- prediction vs. reality around the call date
 
-    if prices is not None and featured_row is not None and "return_5d" in models:
+    if (
+        prices is not None
+        and featured_row is not None
+        and "return_5d" in predictions
+    ):
         st.divider()
         st.subheader(f"{ticker} — model prediction vs. what actually happened")
         call_ts = pd.Timestamp(featured_row["call_date"])
 
-        prob_up_5d = float(
-            models["return_5d"].predict_proba(
-                [[scores["positive"], scores["negative"]]]
-            )[0][1]
-        )
+        prob_up_5d = predictions["return_5d"]
         # Expected move = probability-weighted blend of the historical
         # average post-call up-move and down-move.
         hist_5d = (
@@ -645,5 +935,45 @@ if (analyze or auto_run) and transcript.strip():
                 )
                 fig.update_layout(yaxis_tickformat=".0%", height=450)
                 st.plotly_chart(fig, use_container_width=True)
+
+    # -------------------------------------------------------------- export
+
+    st.divider()
+    report = {
+        "generated": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "characters": len(transcript),
+        "words": n_words,
+        "tokens": n_tokens,
+        "overall": {**scores, "net_sentiment": net},
+        "sections": {
+            name: {**s, "net_sentiment": s["positive"] - s["negative"]}
+            for name, s in section_scores.items()
+        },
+        "hedging": {"count": hedge_count, "per_1000_words": hedge_per_1000},
+        "predicted_probability_up": {
+            HORIZONS[h]: p for h, p in predictions.items()
+        },
+        "tone_timeline_net": [
+            round(c["positive"] - c["negative"], 4) for c in all_chunk_scores
+        ],
+    }
+    st.download_button(
+        "⬇️ Download this analysis (JSON)",
+        json.dumps(report, indent=2),
+        file_name="earnings_call_analysis.json",
+        mime="application/json",
+        use_container_width=True,
+    )
 elif analyze:
     st.warning("Paste a transcript or upload a file first.")
+
+# -------------------------------------------------------------------- footer
+
+st.markdown(
+    '<div class="footer">Made by <b>Marcel Maybaum</b> · '
+    f'<a href="{GITHUB_URL}" target="_blank">Source code on GitHub</a> · '
+    'Powered by <a href="https://huggingface.co/ProsusAI/finbert" '
+    'target="_blank">FinBERT</a> and Yahoo Finance · '
+    "Educational project, not investment advice</div>",
+    unsafe_allow_html=True,
+)

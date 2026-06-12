@@ -18,11 +18,26 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 MODEL_NAME = "ProsusAI/finbert"
 
+LABELS = ("positive", "negative", "neutral")
+
 # 512 minus the two special tokens ([CLS] at the start, [SEP] at the end)
 # that BERT requires around every input.
 MAX_CHUNK_TOKENS = 510
 
 BATCH_SIZE = 8
+
+
+def aggregate(chunk_scores: list[dict]) -> dict[str, float]:
+    """Length-weighted average of per-chunk probabilities.
+
+    Longer chunks influence the final score proportionally more, so the
+    result matches scoring the whole text in one (hypothetical) pass.
+    """
+    total = sum(c["tokens"] for c in chunk_scores)
+    return {
+        label: sum(c[label] * c["tokens"] for c in chunk_scores) / total
+        for label in LABELS
+    }
 
 
 class FinbertScorer:
@@ -41,11 +56,16 @@ class FinbertScorer:
             for start in range(0, len(token_ids), MAX_CHUNK_TOKENS)
         ]
 
-    def score(self, text: str, on_progress=None) -> dict[str, float]:
-        """Return {'positive': p, 'negative': n, 'neutral': u} summing to 1.
+    def score_chunks(self, text: str, on_progress=None) -> list[dict]:
+        """Score every <=510-token chunk of `text` separately.
 
-        Each chunk's probabilities are weighted by its token count, so
-        longer passages influence the final score proportionally more.
+        Returns one dict per chunk, in document order:
+            {'positive': p, 'negative': n, 'neutral': u,
+             'tokens': <chunk length>, 'text': <decoded chunk text>}
+
+        Keeping per-chunk scores (instead of only the aggregate) lets a UI
+        plot how tone evolves through the call and surface the most
+        positive / most negative passages.
 
         `on_progress(done_chunks, total_chunks)` is called after every
         batch so UIs can show real progress on long transcripts.
@@ -58,9 +78,7 @@ class FinbertScorer:
         sep_id = self.tokenizer.sep_token_id
         pad_id = self.tokenizer.pad_token_id
 
-        weighted_probs = torch.zeros(self.model.config.num_labels)
-        total_weight = 0
-
+        results = []
         for b in range(0, len(chunks), BATCH_SIZE):
             batch = chunks[b : b + BATCH_SIZE]
             max_len = max(len(c) for c in batch) + 2  # + [CLS] and [SEP]
@@ -79,16 +97,26 @@ class FinbertScorer:
             probs = torch.softmax(logits, dim=-1)
 
             for row, chunk in enumerate(batch):
-                weight = len(chunk)
-                weighted_probs += probs[row] * weight
-                total_weight += weight
+                chunk_result = {
+                    self.model.config.id2label[i]: float(probs[row][i])
+                    for i in range(self.model.config.num_labels)
+                }
+                chunk_result["tokens"] = len(chunk)
+                chunk_result["text"] = self.tokenizer.decode(chunk)
+                results.append(chunk_result)
 
             if on_progress is not None:
                 on_progress(min(b + BATCH_SIZE, len(chunks)), len(chunks))
 
-        avg = weighted_probs / total_weight
-        labels = [self.model.config.id2label[i] for i in range(len(avg))]
-        return dict(zip(labels, avg.tolist()))
+        return results
+
+    def score(self, text: str, on_progress=None) -> dict[str, float]:
+        """Return {'positive': p, 'negative': n, 'neutral': u} summing to 1.
+
+        Each chunk's probabilities are weighted by its token count, so
+        longer passages influence the final score proportionally more.
+        """
+        return aggregate(self.score_chunks(text, on_progress=on_progress))
 
 
 if __name__ == "__main__":

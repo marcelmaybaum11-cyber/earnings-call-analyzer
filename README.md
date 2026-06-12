@@ -6,9 +6,21 @@ days that follow? This project scores earnings call transcripts with
 on financial text) and tests whether sentiment correlates with the 1-day
 and 5-day post-call returns.
 
-A Streamlit app lets you paste any transcript and get a sentiment
-breakdown, a predicted return direction, and a view of where the call sits
-relative to the historical dataset.
+A Streamlit app lets you paste any transcript and get a full analysis:
+
+- **Sentiment breakdown & tone gauge** — FinBERT positive/negative/neutral
+  probabilities and the net management tone.
+- **Tone timeline** — how sentiment evolves from the opening statement to
+  the end of the call.
+- **Prepared remarks vs. Q&A** — the scripted opening scored separately
+  from the unscripted analyst Q&A.
+- **Hedging-language meter** — density of qualifiers (*approximately,
+  expect, risk, uncertain...*) per 1,000 words.
+- **Standout passages** — the most positive and most negative excerpts.
+- **Return-direction prediction** — up/down call for the next 1 and 5
+  trading days, validated on 188 real earnings calls, with a
+  prediction-vs-reality price chart and fundamentals for sample calls.
+- **JSON export** of the whole analysis.
 
 **Try it live:** https://earnings-call-analyzer-marcel.streamlit.app/
 
@@ -86,3 +98,9 @@ sentiment.
 Caveats: tech mega-caps only, 2016–2020 (a strong bull market), and no
 control for the earnings surprise itself — sentiment likely proxies
 partly for whether results beat or missed expectations.
+
+---
+
+Made by **Marcel Maybaum** · powered by
+[FinBERT](https://huggingface.co/ProsusAI/finbert) (ProsusAI) ·
+educational project, not investment advice.
