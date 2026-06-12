@@ -10,6 +10,8 @@ A Streamlit app lets you paste any transcript and get a sentiment
 breakdown, a predicted return direction, and a view of where the call sits
 relative to the historical dataset.
 
+**Try it live:** https://earnings-call-analyzer-marcel.streamlit.app/
+
 > Educational project — a statistical exercise, not investment advice.
 
 ## How it works
